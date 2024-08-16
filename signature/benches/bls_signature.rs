@@ -6,6 +6,7 @@
 
 #[macro_use]
 extern crate criterion;
+
 use ark_std::rand::rngs::StdRng;
 use criterion::{BenchmarkGroup, Criterion, Throughput};
 use jf_signature::{
@@ -14,78 +15,87 @@ use jf_signature::{
 };
 use jf_utils::test_rng;
 
+/// Benchmarks the aggregation and verification of signatures.
 fn bench_aggregate<S: AggregateableSignatureSchemes, T: criterion::measurement::Measurement>(
     benchmark_group: &mut BenchmarkGroup<T>,
     msgs: &[&[S::MessageUnit]],
     rng: &mut StdRng,
 ) {
-    let pp = S::param_gen(Some(rng)).unwrap();
+    let pp = S::param_gen(Some(rng)).expect("Parameter generation failed");
     let mut vks = vec![];
     let mut sigs = vec![];
     let mut partial_sigs = vec![];
     let msg_for_msig = &msgs[0];
+
     for msg in msgs.iter() {
-        let (sk, vk) = S::key_gen(&pp, rng).unwrap();
-        let sig = S::sign(&pp, &sk, msg, rng).unwrap();
-        let partial_sig = S::sign(&pp, &sk, msg_for_msig, rng).unwrap();
+        let (sk, vk) = S::key_gen(&pp, rng).expect("Key generation failed");
+        let sig = S::sign(&pp, &sk, msg, rng).expect("Signing failed");
+        let partial_sig = S::sign(&pp, &sk, msg_for_msig, rng).expect("Signing failed");
         vks.push(vk);
         sigs.push(sig);
         partial_sigs.push(partial_sig);
     }
 
-    let agg_sig = S::aggregate(&pp, &vks, &sigs).unwrap();
-    let multi_sig = S::aggregate(&pp, &vks, &partial_sigs).unwrap();
+    let agg_sig = S::aggregate(&pp, &vks, &sigs).expect("Aggregation failed");
+    let multi_sig = S::aggregate(&pp, &vks, &partial_sigs).expect("Aggregation failed");
 
     benchmark_group.bench_function(format!("aggregation_{}", msgs.len()), |b| {
-        b.iter(|| S::aggregate(&pp, &vks, &sigs).unwrap())
+        b.iter(|| S::aggregate(&pp, &vks, &sigs).expect("Aggregation failed"))
     });
     benchmark_group.bench_function(format!("aggregate_verification_{}", msgs.len()), |b| {
-        b.iter(|| S::aggregate_verify(&pp, &vks, msgs, &agg_sig).unwrap())
+        b.iter(|| S::aggregate_verify(&pp, &vks, msgs, &agg_sig).expect("Verification failed"))
     });
     benchmark_group.bench_function(
         format!("multi_signature_verification_{}", msgs.len()),
-        |b| b.iter(|| S::multi_sig_verify(&pp, &vks, msgs[0], &multi_sig).unwrap()),
+        |b| b.iter(|| S::multi_sig_verify(&pp, &vks, msgs[0], &multi_sig).expect("Verification failed")),
     );
 }
 
+/// Benchmarks the BLS12-381 signature scheme.
 fn bench_bls12381(c: &mut Criterion) {
     let mut benchmark_group = c.benchmark_group("BLS Over BLS12-381");
     benchmark_group.sample_size(500);
     benchmark_group.throughput(Throughput::Elements(1u64));
+
     let rng = &mut test_rng();
-    let (sk, vk) = BLSSignatureScheme::key_gen(&(), rng).unwrap();
-    let msg = String::from_utf8(vec![b'X'; 1024]).unwrap();
-    let sig = BLSSignatureScheme::sign(&(), &sk, &msg, rng).unwrap();
+    let (sk, vk) = BLSSignatureScheme::key_gen(&(), rng).expect("Key generation failed");
+    let msg = String::from_utf8(vec![b'X'; 1024]).expect("Message generation failed");
+    let sig = BLSSignatureScheme::sign(&(), &sk, &msg, rng).expect("Signing failed");
 
     benchmark_group.bench_function("Sign", |b| {
-        b.iter(|| BLSSignatureScheme::sign(&(), &sk, &msg, rng).unwrap())
+        b.iter(|| BLSSignatureScheme::sign(&(), &sk, &msg, rng).expect("Signing failed"))
     });
     benchmark_group.bench_function("Verification", |b| {
-        b.iter(|| BLSSignatureScheme::verify(&(), &vk, &msg, &sig).unwrap())
+        b.iter(|| BLSSignatureScheme::verify(&(), &vk, &msg, &sig).expect("Verification failed"))
     });
 
-    // TODO: aggregate signature benchmark not implemented
+    // Aggregate signature benchmark
+    let msgs = vec![msg.as_bytes(); 100];
+    bench_aggregate::<BLSSignatureScheme, _>(&mut benchmark_group, &msgs, rng);
 
     benchmark_group.finish();
 }
 
+/// Benchmarks the BN254 curve signature scheme.
 fn bench_bn254(c: &mut Criterion) {
-    let mut benchmark_group = c.benchmark_group("BLS Over Bn254");
+    let mut benchmark_group = c.benchmark_group("BLS Over BN254");
     benchmark_group.sample_size(100);
     benchmark_group.throughput(Throughput::Elements(1u64));
+
     let rng = &mut test_rng();
-    let (sk, vk) = BLSOverBN254CurveSignatureScheme::key_gen(&(), rng).unwrap();
+    let (sk, vk) = BLSOverBN254CurveSignatureScheme::key_gen(&(), rng).expect("Key generation failed");
     let msg = vec![12u8; 1000];
     let msgs = vec![msg.as_slice(); 1000];
-    let sig = BLSOverBN254CurveSignatureScheme::sign(&(), &sk, msgs[0], rng).unwrap();
+    let sig = BLSOverBN254CurveSignatureScheme::sign(&(), &sk, msgs[0], rng).expect("Signing failed");
 
     benchmark_group.bench_function("Sign", |b| {
-        b.iter(|| BLSOverBN254CurveSignatureScheme::sign(&(), &sk, msgs[0], rng).unwrap())
+        b.iter(|| BLSOverBN254CurveSignatureScheme::sign(&(), &sk, msgs[0], rng).expect("Signing failed"))
     });
     benchmark_group.bench_function("Verification", |b| {
-        b.iter(|| BLSOverBN254CurveSignatureScheme::verify(&(), &vk, msgs[0], &sig).unwrap())
+        b.iter(|| BLSOverBN254CurveSignatureScheme::verify(&(), &vk, msgs[0], &sig).expect("Verification failed"))
     });
 
+    // Aggregate signature benchmarks for different sizes of messages
     bench_aggregate::<BLSOverBN254CurveSignatureScheme, _>(
         &mut benchmark_group,
         &msgs.as_slice()[0..10],
@@ -105,6 +115,7 @@ fn bench_bn254(c: &mut Criterion) {
     benchmark_group.finish();
 }
 
+/// Runs all benchmarks.
 fn bench(c: &mut Criterion) {
     bench_bls12381(c);
     bench_bn254(c);
